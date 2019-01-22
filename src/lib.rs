@@ -2,7 +2,7 @@ use nuitrack_rs as nui;
 
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use self::nui::{Skeleton, SKELETON_BONES, JointType};
+use self::nui::{Skeleton, JointType};
 
 #[derive(Debug)]
 pub enum Pose {
@@ -15,54 +15,51 @@ pub struct Vec2 {
     y: f32,
 }
 
-pub type Bones = HashMap<(JointType, JointType), (Vec2, Vec2)>;
+pub type JointPos = HashMap<JointType, Vec2>;
 
 const THRESHOLD: f32 = 0.5;
 
 const SPOT: Vec2 = Vec2{ x: 0.5, y: 0.5 };
 
-const STAR: &'static [((JointType, JointType), (Vec2, Vec2))] = &[
-    ((JointType::Head, JointType::Neck), (SPOT, SPOT)),
-    ((JointType::Neck, JointType::Torso), (SPOT, SPOT)),
-    ((JointType::LeftShoulder, JointType::RightShoulder), (SPOT, SPOT)),
-    ((JointType::Waist, JointType::LeftHip), (SPOT, SPOT)),
-    ((JointType::Waist, JointType::RightHip), (SPOT, SPOT)),
-    ((JointType::Torso, JointType::Waist), (SPOT, SPOT)),
-    ((JointType::LeftShoulder, JointType::LeftElbow), (SPOT, SPOT)),
-    ((JointType::LeftElbow, JointType::LeftWrist), (SPOT, SPOT)),
-    ((JointType::LeftHip, JointType::LeftKnee), (SPOT, SPOT)),
-    ((JointType::LeftKnee, JointType::LeftAnkle), (SPOT, SPOT)),
-    ((JointType::RightShoulder, JointType::RightElbow), (SPOT, SPOT)),
-    ((JointType::RightElbow, JointType::RightWrist), (SPOT, SPOT)),
-    ((JointType::RightHip, JointType::RightKnee), (SPOT, SPOT)),
-    ((JointType::RightKnee, JointType::RightAnkle), (SPOT, SPOT)),
+const STAR: &'static [(JointType, Vec2)] = &[
+    (JointType::Head, SPOT),
+    (JointType::Neck, SPOT),
+    (JointType::LeftShoulder, SPOT),
+    (JointType::Waist, SPOT),
+    (JointType::Torso, SPOT),
+    (JointType::LeftShoulder, SPOT),
+    (JointType::LeftElbow, SPOT),
+    (JointType::LeftHip, SPOT),
+    (JointType::LeftKnee, SPOT),
+    (JointType::RightShoulder, SPOT),
+    (JointType::RightElbow, SPOT),
+    (JointType::RightHip, SPOT),
+    (JointType::RightKnee, SPOT),
 ];
 
 pub fn detect(skeleton: &Skeleton) -> Option<Pose> {
-    // [(Joint, Joint)] -> Bones 
     let joints = skeleton
         .joints()
-        .iter()
-        .zip(skeleton.joints().iter());
+        .iter();
 
-    let mut bones: Bones = HashMap::new();
+    let mut joint_pos: JointPos = HashMap::new();
 
-    for (a, b) in joints {
-        match (JointType::from_u32(a.type_), JointType::from_u32(b.type_)) {
-            (Some(t1), Some(t2)) => {
-                bones.insert((t1, t2), (Vec2{ x: a.proj.x, y: a.proj.y }, Vec2{ x: b.proj.x, y: b.proj.y }));
+    for j in joints {
+        match JointType::from_u32(j.type_) {
+            Some(t) => {
+                joint_pos.insert(t, Vec2{ x: j.proj.x, y: j.proj.y });
             },
             _ => (),
         }
     }
 
-    let star: Bones = HashMap::from_iter(STAR.iter().cloned());
-    // Bones -> Pose -> [Distance]
+    let star: JointPos = HashMap::from_iter(STAR.iter().cloned());
+    // JointPos -> Pose -> [Distance]
     // [Distance] -> closeness: f32
-    let closeness = bones.iter()
-        .filter_map(|(k, (v1_s, v1_e))| {
+    let closeness = joint_pos.iter()
+        .filter_map(|(k, v1)| {
             star.get(&k)
-                .map(|(v2_s, v2_e)| distance(v1_s, v2_s) + distance(v1_e, v2_e))
+                .map(|v2| distance(v1, v2))
         })
     .fold(0.0, |total, dist| total + dist);
     if closeness < THRESHOLD {

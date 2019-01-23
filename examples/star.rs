@@ -4,14 +4,19 @@ use nuitrack_rs::{Vector3, Orientation, Joint, Skeleton};
 use self::npe::Pose;
 
 fn main() {
-    let (_joints, skeleton) = mock_data();
+    let joints = mock_data();
+    let skeleton = Skeleton {
+        id: 0,
+        num_joints: 24,
+        joints: &joints[0],
+    };
     //Skeleton -> Pose
     let pose = npe::detect(&skeleton);
     println!("Pose {:?}", pose);
 }
 
-fn mock_data() -> ([Joint; 24], Skeleton) {
-    let joints = [ Joint { type_: 1, confidence: 0.75, real: Vector3 { x: 21.612122, y: 440.7368, z: 1077.2002 }, proj: Vector3 { x: 0.51787436, y: 0.013984492, z: 1077.2002 }, orient: Orientation { matrix: [0.99727744, -0.07308053, 0.009848095, 0.071373835, 0.99018276, 0.120182484, -0.018534413, -0.11915238, 0.99270296] } }
+fn mock_data() -> Vec<Joint> {
+    vec![ Joint { type_: 1, confidence: 0.75, real: Vector3 { x: 21.612122, y: 440.7368, z: 1077.2002 }, proj: Vector3 { x: 0.51787436, y: 0.013984492, z: 1077.2002 }, orient: Orientation { matrix: [0.99727744, -0.07308053, 0.009848095, 0.071373835, 0.99018276, 0.120182484, -0.018534413, -0.11915238, 0.99270296] } }
     , Joint { type_: 2, confidence: 0.75, real: Vector3 { x: 114.944756, y: 395.84195, z: 1085.5349 }, proj: Vector3 { x: 0.5943352, y: 0.06684306, z: 1085.5349 }, orient: Orientation { matrix: [0.99727744, -0.07308053, 0.009848095, 0.071373835, 0.99018276, 0.120182484, -0.018534413, -0.11915238, 0.99270296] } }
     , Joint { type_: 3, confidence: 0.75, real: Vector3 { x: 122.86625, y: 119.94968, z: 1120.819 }, proj: Vector3 { x: 0.59766203, y: 0.37287503, z: 1120.819 }, orient: Orientation { matrix: [0.99727744, -0.07308053, 0.009848095, 0.071373835, 0.99018276, 0.120182484, -0.018534413, -0.11915238, 0.99270296] } }
     , Joint { type_: 4, confidence: 0.75, real: Vector3 { x: 116.58102, y: -51.862366, z: 1106.9888 }, proj: Vector3 { x: 0.5938238, y: 0.5556514, z: 1106.9888 }, orient: Orientation { matrix: [0.9965209, 0.033623803, -0.076259606, -0.043253943, 0.9907824, -0.12837182, 0.07124033, 0.13122372, 0.98878974] } }
@@ -34,11 +39,6 @@ fn mock_data() -> ([Joint; 24], Skeleton) {
     , Joint { type_: 21, confidence: 0.75, real: Vector3 { x: 22.58023, y: -68.280396, z: 1085.1774 }, proj: Vector3 { x: 0.5185377, y: 0.5747416, z: 1085.1774 }, orient: Orientation { matrix: [0.9929866, -0.011785427, 0.11763766, 0.067626506, 0.8727833, -0.48340043, -0.0969751, 0.4879656, 0.8674592] } }
     , Joint { type_: 22, confidence: 0.75, real: Vector3 { x: 26.493052, y: -378.45874, z: 915.9117 }, proj: Vector3 { x: 0.5257696, y: 0.99083126, z: 915.9117 }, orient: Orientation { matrix: [0.9929866, -0.032033946, 0.11380396, 0.067626506, 0.94346535, -0.32449928, -0.0969751, 0.3299196, 0.93901485] } }
     , Joint { type_: 23, confidence: 0.0, real: Vector3 { x: 26.493052, y: -710.8651, z: 915.9117 }, proj: Vector3 { x: 0.5257696, y: 1.4219362, z: 915.9117 }, orient: Orientation { matrix: [0.9929866, -0.032033946, 0.11380396, 0.067626506, 0.94346535, -0.32449928, -0.0969751, 0.3299196, 0.93901485] } }
-    , Joint { type_: 24, confidence: 0.0, real: Vector3 { x: 0.0, y: 0.0, z: 0.0 }, proj: Vector3 { x: 0.0, y: 0.0, z: 0.0 }, orient: Orientation { matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] } } ];
+    , Joint { type_: 24, confidence: 0.0, real: Vector3 { x: 0.0, y: 0.0, z: 0.0 }, proj: Vector3 { x: 0.0, y: 0.0, z: 0.0 }, orient: Orientation { matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] } } ]
 
-    (joints, Skeleton {
-        id: 0,
-        num_joints: 24,
-        joints: &joints[0],
-    })
 }

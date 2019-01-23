@@ -4,7 +4,12 @@ extern crate vulkano_shaders;
 extern crate nuitrack_rs as nuitrack;
 
 use termion;
-use self::termion::clear;
+use nuitrack_pose_estimation;
+use serde;
+use serde_json;
+use clap;
+
+use nuitrack_pose_estimation::{Joint2D, Joint2DType};
 use self::nannou::prelude::*;
 use self::vulkano::buffer::{BufferUsage, ImmutableBuffer};
 use self::vulkano::command_buffer::DynamicState;
@@ -21,15 +26,38 @@ use self::nuitrack::{Color3, Joint};
 use std::cell::RefCell;
 use std::sync::{mpsc, Arc};
 use self::nuitrack::JointType;
+use std::thread::JoinHandle;  
+use std::time::{Duration, Instant};
+use std::fs::OpenOptions;
 
 fn main() {
-    nannou::app(model).update(update).run();
+    nannou::app(model)
+        .update(update)
+        .exit(exit)
+        .run();
 }
 
 struct Model {
     rx: Receivers,
     current: Current,
     graphics: Graphics,
+    handles: Handles,
+    capture: Capture,
+    mode: DesignMode,
+}
+
+struct Capture {
+    time: Timing,
+    done: bool,
+}
+
+struct Timing {
+    left: Duration,
+    last: Instant,
+}
+
+struct Handles {
+    nui: JoinHandle<()>,
 }
 
 struct Graphics {
@@ -52,11 +80,13 @@ impl Vertex {
     const MODE_RGBA: u32 = 0;
     const MODE_DEPTH: u32 = 1;
     const MODE_SKELETON: u32 = 2;
+    const MODE_DEBUG: u32 = 3;
 }
 
 // The most recently received skeletons, depth and color.
 struct Current {
     skeletons: Option<Vec<Skeleton>>,
+    debug_poses: Option<Vec<Vector2<f32>>>,
     depth: Option<DepthFrame>,
     color: Option<ColorFrame>,
     // The current color image on the GPU.
@@ -68,6 +98,14 @@ struct Receivers {
     skeletons: mpsc::Receiver<Vec<Skeleton>>,
     depth: mpsc::Receiver<DepthFrame>,
     color: mpsc::Receiver<ColorFrame>,
+    nui: mpsc::Sender<bool>,
+    skeleton_debug_rx: mpsc::Receiver<Vec<Vector2>>,
+}
+
+#[derive(Clone)]
+enum DesignMode {
+    Capture(u64),
+    Test,
 }
 
 struct Skeleton {
@@ -87,37 +125,67 @@ struct ColorFrame {
 }
 
 fn model(app: &App) -> Model {
-    app.new_window()
-        .with_dimensions(640 * 2, 480)
+    let arg_matches = clap::App::new("Pose Designer")
+        .arg(clap::Arg::with_name("capture")
+             .short("c")
+             .long("capture")
+             .help("Captures a poses after x seconds")
+             .takes_value(true))
+        .get_matches();
+    let design_mode = match arg_matches.value_of("capture") {
+        Some(s) => DesignMode::Capture(s.parse().unwrap()),
+        None => DesignMode::Test,
+    };
+    let window_id = app.new_window()
+        .with_dimensions(480 * 2, 640)
         .view(view)
         .build()
         .unwrap();
+
+    app.window(window_id)
+        .expect("No window")
+        .set_position(600, 0);
 
     /////////////////////
     // Nuitrack Thread //
     /////////////////////
 
     let (skeletons_tx, skeletons) = mpsc::channel();
+    let (skeleton_debug_tx, skeleton_debug_rx) = mpsc::channel();
     let (depth_tx, depth) = mpsc::channel();
     let (color_tx, color) = mpsc::channel();
+    let (nui_tx, nui_rx) = mpsc::channel();
 
-    std::thread::spawn(move || {
+    let detection_test = match design_mode {
+        DesignMode::Test => Some(nuitrack_pose_estimation::Tester::new("STAR".to_string())),
+        _ => None,
+    };
+    let nui_join_handle = std::thread::spawn(move || {
         let mut nui = nuitrack_rs::init()
             .expect("Couldn't create nui");
         
-        /*
         nui.set_camera_rotation(90)
             .expect("Failed to rotate");
-            */
 
         nui.skeleton_data(move |data| {
+            let mut debug_poses = Vec::new();
             let skeletons = data.skeletons()
                 .iter()
-                .map(|skeleton| Skeleton {
-                    joints: skeleton.joints().to_vec()
+                .map(|skeleton| {
+                    if let Some(ref tester) = detection_test {
+                        let (pose, pose_verts) = tester.test(&skeleton);
+                        debug_poses = pose_verts.iter()
+                            .map(|v| vec2(v.x, v.y))
+                            .collect();
+                        println!("Pose: {:?}", pose);
+                    }
+                    Skeleton {
+                        joints: skeleton.joints().to_vec()
+                    }
                 })
                 .collect();
             skeletons_tx.send(skeletons).ok();
+            skeleton_debug_tx.send(debug_poses).ok();
         }).expect("Failed to add callback");
 
         nui.depth_data(move |data| {
@@ -143,10 +211,17 @@ fn model(app: &App) -> Model {
 
         // Run at ~30fps forever.
         loop {
-            nui.update().expect("failed to update nui player");
+            match nui_rx.try_recv() {
+                Ok(_) => break,
+                Err(_) => {
+                    nui.update().expect("failed to update nui player");
+                },
+            }
         }
     });
-    let rx = Receivers { skeletons, depth, color };
+    let rx = Receivers { skeletons, depth, color, nui: nui_tx, skeleton_debug_rx };
+
+    let handles = Handles { nui: nui_join_handle };
 
     /////////////////////////////
     // Graphics Initialisation //
@@ -233,16 +308,33 @@ fn model(app: &App) -> Model {
 
     let current = Current {
         skeletons: None,
+        debug_poses: None,
         depth: None,
         color: None,
         rgba_image,
         depth_image,
     };
 
+    let time = match design_mode {
+        DesignMode::Capture(s) => Timing {
+            left: Duration::from_secs(s),
+            last: Instant::now(),
+        },
+        _ => Timing {
+            left: Duration::from_secs(0),
+            last: Instant::now(),
+        },
+    };
+    let capture = Capture { time, done: false };
+
+    print!("{}", termion::clear::All);
     Model {
         rx,
         current,
         graphics,
+        handles,
+        capture,
+        mode: design_mode
     }
 }
 
@@ -250,6 +342,37 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     // Update the skeleton.
     if let Some(skeletons) = model.rx.skeletons.try_iter().last() {
         model.current.skeletons = Some(skeletons);
+    }
+    
+    // Update the skeleton.
+    if let Some(debug_pose) = model.rx.skeleton_debug_rx.try_iter().last() {
+        model.current.debug_poses = Some(debug_pose);
+    }
+    
+    if let DesignMode::Capture(_) = model.mode {
+        if model.capture.time.left <= Duration::from_millis(500) && !model.capture.done {
+            print!("{}{}", termion::cursor::Goto(1,20), termion::clear::CurrentLine);
+            print!("CAPTURE");
+            if let Some(ref skeletons) = model.current.skeletons {
+                if let Some(sk) = skeletons.get(0) {
+                    model.capture.done = true;
+                    capture_skeleton(&sk);
+                } else{
+                    println!("No skeleton to capture");
+                }
+            } else {
+                println!("No skeleton to capture");
+            }
+        } else {
+            let left = model.capture.time.left.clone();
+            let time_used = Instant::now() - model.capture.time.last;
+            if let Some(left) = left.checked_sub(time_used) {
+                model.capture.time.left = left;
+            }
+            print!("{}{}", termion::cursor::Goto(1,20), termion::clear::CurrentLine);
+            print!("Capturing in: {}", model.capture.time.left.as_secs());
+            model.capture.time.last = Instant::now();
+        }
     }
 
     // Update the current depth.
@@ -339,10 +462,10 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
     // Skeleton vertices as squares overlaid on the Rgba texture half of the window.
     let mut skeleton_vertices = vec![];
     if let Some(ref skeletons) = model.current.skeletons {
-        print!("{}", termion::cursor::Goto(1,1));
+        //print!("{}", termion::cursor::Goto(1,1));
         for skeleton in skeletons {
             for joint in &skeleton.joints {
-                println!("{}{:?} x: {2:.2}, y: {3:.2}", clear::CurrentLine, JointType::from_u32(joint.type_), joint.proj.x, joint.proj.y);
+                //println!("{}{:?} x: {2:.2}, y: {3:.2}", clear::CurrentLine, JointType::from_u32(joint.type_), joint.proj.x, joint.proj.y);
                 let w = 8.0 / img_w as f32;
                 let h = 8.0 / img_h as f32;
                 let vs = Rect::from_w_h(w, h)
@@ -362,10 +485,31 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
         }
     }
 
+    let mut debug_vertices = vec![];
+    if let Some(ref debug_poses) = model.current.debug_poses {
+        for debug_pose in debug_poses {
+            let w = 8.0 / img_w as f32;
+            let h = 8.0 / img_h as f32;
+            let vs = Rect::from_w_h(w, h)
+                .shift([debug_pose.x - 1.0, debug_pose.y * 2.0 - 1.0].into())
+                .triangles_iter()
+                .flat_map(|tri| tri.vertices())
+                .map(|v| {
+                    Vertex {
+                        position: [v.x, v.y],
+                        tex_coords: [0.0, 0.0],
+                        mode: Vertex::MODE_DEBUG,
+                    }
+                });
+            debug_vertices.extend(vs);
+        }
+    }
+
     // Chain all the vertices together ready for vertex buffer creation.
     let vertices = rgba_vertices.iter().cloned()
         .chain(depth_vertices.iter().cloned())
         .chain(skeleton_vertices)
+        .chain(debug_vertices)
         .collect::<Vec<_>>();
 
     // The vertex buffer that will be submitted to the GPU.
@@ -397,6 +541,44 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
         .expect("failed to add `end_render_pass` command");
 
     frame
+}
+
+fn capture_skeleton(skeleton: &Skeleton) {
+    let mut skeleton_vertices: Vec<Joint2D> = Vec::new();
+    for joint in &skeleton.joints {
+        //println!("{}{:?} x: {2:.2}, y: {3:.2}", clear::CurrentLine, JointType::from_u32(joint.type_), joint.proj.x, joint.proj.y);
+        if let Some(jt) = JointType::from_u32(joint.type_) {
+            let jt: Joint2DType = jt.into();
+            let pos = [joint.proj.x, joint.proj.y];
+            skeleton_vertices.push(Joint2D::new(jt, pos));
+        }
+    }
+    let mut input = String::new();
+
+    println!("{}Enter a name for this pose", termion::clear::All);
+    std::io::stdin().read_line(&mut input).expect("Couldnt read line");
+
+    let name = input.trim().to_string();
+    println!("Saving: {:?}", name);
+    let pose_record = nuitrack_pose_estimation::PoseRecord {
+        name,
+        data: skeleton_vertices
+    };
+    let mut path = std::env::current_dir().expect("Couldn't find current directory");
+    path.push("poses.json");
+    let file = OpenOptions::new().append(true).create(true).open(path).expect("Failed to open file for writing poses");
+    serde_json::to_writer(file, &pose_record).expect("Failed to write to file");
+}
+
+
+fn exit(_: &App, model: Model){
+    let Model {
+       rx,
+       handles,
+       ..
+    } = model;
+    rx.nui.send(true).unwrap();
+    handles.nui.join().unwrap();
 }
 
 //////////////////
@@ -452,8 +634,10 @@ void main() {
         float d = texture(depth_sampler, tex_coords).x;
         f_color = vec4(d, d, d, 1.0);
     // Skeleton.
-    } else {
+    } else if (mode == uint(2)) {
         f_color = vec4(1.0, 0.2, 0.6, 1.0);
+    } else {
+        f_color = vec4(0.6, 0.2, 1.0, 1.0);
     }
 }"
     }

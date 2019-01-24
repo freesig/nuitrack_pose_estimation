@@ -34,6 +34,7 @@ pub type JointPos = HashMap<JointType, Vec2>;
 pub struct Detector {
     threshold: f32,
     curve: i32,
+    joint_cutoff: f32,
     poses: HashMap<Pose, JointPos>,
 }
 
@@ -46,6 +47,11 @@ pub struct Tester {
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
+}
+
+enum EstJoint {
+    Dist(f32),
+    CutOff,
 }
 
 impl Joint2D {
@@ -104,7 +110,7 @@ impl std::ops::Add for &Vec2 {
 
 
 impl Detector {
-    pub fn new(threshold: f32, curve: i32) -> Self {
+    pub fn new(threshold: f32, curve: i32, joint_cutoff: f32) -> Self {
         let mut poses = HashMap::new();
         for pose_record in poses::read_poses().into_iter() {
             let PoseRecord {
@@ -116,7 +122,7 @@ impl Detector {
                              data.into_iter().map(|j2d| (joints::j2d_to_j(j2d.0), Vec2::xy(j2d.1[0], j2d.1[1]))).collect());
             }
         }
-        Detector{ threshold, poses, curve }
+        Detector{ threshold, poses, curve, joint_cutoff }
     }
     
     pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
@@ -124,7 +130,19 @@ impl Detector {
         self.check_poses(joints)
     }
 
-    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> (Option<()>, Vec<Vec2>, Vec<Vec2>) {
+    pub fn set_threshold(&mut self, threshold: f32) {
+        self.threshold = threshold;
+    }
+
+    pub fn set_curve(&mut self, curve: i32) {
+        self.curve = curve;
+    }
+    
+    pub fn set_joint_cutoff(&mut self, joint_cutoff: f32) {
+        self.joint_cutoff = joint_cutoff;
+    }
+
+    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> (Option<f32>, Vec<Vec2>, Vec<Vec2>) {
         let mut joints = joints_map(skeleton);
         let pose = self.poses.get(&name).expect(&format!("Pose {:?} doesn't exist", name));
         (self.check_pose(pose, &mut joints),
@@ -137,28 +155,52 @@ impl Detector {
     }
 
     fn check_poses(&self, mut joints: JointPos) -> Option<Pose> {
+        let mut estimation = None;
+        let mut max_closeness = std::f32::MAX;
         for (name, pose) in &self.poses {
-            if let Some(_) = self.check_pose(pose, &mut joints) {
-                return Some(*name);
+            if let Some(closeness) = self.check_pose(pose, &mut joints) {
+                if closeness < max_closeness {
+                    estimation = Some(*name);
+                    max_closeness = closeness;
+                }
+
             }
         }
-        None
+        estimation
     }
 
-    fn check_pose(&self, pose: &JointPos, joints: &mut JointPos ) -> Option<()> {
+    fn check_pose(&self, pose: &JointPos, joints: &mut JointPos ) -> Option<f32> {
         let torso = joints.get(&JointType::Torso).map(|&t| t);
         if let (Some(torso), Some(pose_torso)) =  (torso, pose.get(&JointType::Torso)){
             allign(joints, &torso, pose_torso);
             let closeness = joints.iter()
                 .filter_map(|(k, v1)| {
                     pose.get(&k)
-                        .map(|v2| distance(v1, v2).powi(self.curve))
+                        .map(|v2| {
+                            let dist = distance(v1, v2);
+                            if dist < self.joint_cutoff {
+                                EstJoint::Dist(dist)
+                            } else {
+                                EstJoint::CutOff
+                            }
+                        })
+                        .map(|d| match d {
+                            EstJoint::Dist(dist) => EstJoint::Dist(dist.powi(self.curve)),
+                            EstJoint::CutOff => d,
+                        })
                 })
-            .fold(0.0, |total, dist| total + dist);
-            if closeness < self.threshold {
-                Some(())
-            } else {
-                None
+            .fold(EstJoint::Dist(0.0), |total, dist| { 
+                match dist {
+                    EstJoint::Dist(d) => match total {
+                        EstJoint::Dist(t) => EstJoint::Dist(t + d),
+                        EstJoint::CutOff => EstJoint::CutOff,
+                    }
+                    EstJoint::CutOff => EstJoint::CutOff,
+                }
+            });
+            match closeness {
+                EstJoint::Dist(c) if c < self.threshold => Some(c),
+                _ => None,
             }
         } else {
             None
@@ -168,8 +210,8 @@ impl Detector {
 }
 
 impl Tester {
-    pub fn from_name(name: String, threshold: f32, curve: i32) -> Option<Self> {
-        let detector = Detector::new(threshold, curve);
+    pub fn from_name(name: String, threshold: f32, curve: i32, joint_cutoff: f32) -> Option<Self> {
+        let detector = Detector::new(threshold, curve, joint_cutoff);
         Pose::from_name(&name)
             .map(|name| Tester{ detector, name })
     }

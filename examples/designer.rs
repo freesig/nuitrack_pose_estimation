@@ -8,6 +8,8 @@ use nuitrack_pose_estimation;
 use serde_json;
 use clap;
 
+mod controls;
+
 use nuitrack_pose_estimation::{Joint2D, Joint2DType};
 use self::nannou::prelude::*;
 use self::vulkano::buffer::{BufferUsage, ImmutableBuffer};
@@ -29,6 +31,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use std::fs::OpenOptions;
 
+use nannou::ui::{Ui, widget};
+
 fn main() {
     nannou::app(model)
         .update(update)
@@ -43,6 +47,15 @@ struct Model {
     handles: Handles,
     capture: Capture,
     mode: DesignMode,
+    controls: Controls,
+    ui: Ui,
+    ids: Ids,
+}
+
+struct Controls {
+    threshold: f32,
+    curve: i32,
+    joint_cutoff: f32,
 }
 
 struct Capture {
@@ -97,6 +110,7 @@ struct Current {
 
 struct Receivers {
     skeletons: mpsc::Receiver<Vec<Skeleton>>,
+    detection: mpsc::Sender<DetectionMsg>,
     depth: mpsc::Receiver<DepthFrame>,
     color: mpsc::Receiver<ColorFrame>,
     nui: mpsc::Sender<bool>,
@@ -108,6 +122,7 @@ enum DesignMode {
     Capture(u64),
     Test(String, f32),
     Play,
+    Detect,
 }
 
 struct Skeleton {
@@ -124,6 +139,19 @@ struct ColorFrame {
     rows: u32,
     cols: u32,
     data: Vec<Color3>,
+}
+
+enum DetectionMsg {
+    Threshold(f32),
+    Curve(i32),
+    JointCutOff(f32),
+}
+
+struct Ids {
+    threshold: widget::Id,
+    curve: widget::Id,
+    joint_cutoff: widget::Id,
+    background: widget::Id,
 }
 
 fn model(app: &App) -> Model {
@@ -143,13 +171,24 @@ fn model(app: &App) -> Model {
              .long("threshold")
              .help("Threshold of pose detection.")
              .takes_value(true))
+        .arg(clap::Arg::with_name("detect")
+             .short("d")
+             .long("detect")
+             .help("Detects all shapes"))
         .get_matches();
     let design_mode = match (arg_matches.value_of("capture"), arg_matches.value_of("test"), arg_matches.value_of("threshold")) {
         (Some(s), None, None) => DesignMode::Capture(s.parse().unwrap()),
         (None, Some(p), Some(t)) => DesignMode::Test(p.to_string(), t.parse().unwrap()),
         (None, Some(p), None) => DesignMode::Test(p.to_string(), 10.0),
-        _ => DesignMode::Play,
+        _ => {
+            if arg_matches.is_present("detect") {
+                DesignMode::Detect
+            } else {
+                DesignMode::Play
+            }
+        }
     };
+
     let window_id = app.new_window()
         .with_dimensions(480 * 2, 640)
         .view(view)
@@ -166,12 +205,18 @@ fn model(app: &App) -> Model {
 
     let (skeletons_tx, skeletons) = mpsc::channel();
     let (skeleton_debug_tx, skeleton_debug_rx) = mpsc::channel();
+    let (detection_tx, detection_rx) = mpsc::channel();
     let (depth_tx, depth) = mpsc::channel();
     let (color_tx, color) = mpsc::channel();
     let (nui_tx, nui_rx) = mpsc::channel();
 
     let detection_test = match design_mode {
-        DesignMode::Test(ref pose_name, threshold) => nuitrack_pose_estimation::Tester::from_name(pose_name.clone(), threshold, 1),
+        DesignMode::Test(ref pose_name, threshold) => nuitrack_pose_estimation::Tester::from_name(pose_name.clone(), threshold, 1, 1.0),
+        _ => None,
+    };
+
+    let mut live_detection = match design_mode {
+        DesignMode::Detect => Some(nuitrack_pose_estimation::Detector::new(1.0, 1, 1.0)),
         _ => None,
     };
     let nui_join_handle = std::thread::spawn(move || {
@@ -197,6 +242,16 @@ fn model(app: &App) -> Model {
                             .collect();
                         //print!("{}{}", termion::cursor::Goto(1,40), termion::clear::CurrentLine);
                         println!("Pose: {:?}", pose);
+                    }
+                    if let Some(ref mut detector) = live_detection {
+                        if let Ok(msg) = detection_rx.try_recv() {
+                            match msg {
+                                DetectionMsg::Threshold(t) => detector.set_threshold(t),
+                                DetectionMsg::Curve(c) => detector.set_curve(c),
+                                DetectionMsg::JointCutOff(co) => detector.set_joint_cutoff(co),
+                            }
+                        }
+                        println!("Detecting {:?}", detector.detect(&skeleton));
                     }
                     Skeleton {
                         joints: skeleton.joints().to_vec()
@@ -238,7 +293,8 @@ fn model(app: &App) -> Model {
             }
         }
     });
-    let rx = Receivers { skeletons, depth, color, nui: nui_tx, skeleton_debug_rx };
+
+    let rx = Receivers { skeletons, depth, color, nui: nui_tx, skeleton_debug_rx, detection: detection_tx };
 
     let handles = Handles { nui: nui_join_handle };
 
@@ -347,6 +403,28 @@ fn model(app: &App) -> Model {
     };
     let capture = Capture { time, done: false };
 
+    // GUI
+    let gui_window = app.new_window()
+        .with_dimensions(300, 500)
+        .view(ui_view)
+        .build()
+        .expect("Failed to build second window");
+    let mut ui = app.new_ui().window(gui_window).build().unwrap();
+
+    let controls = Controls {
+        threshold: 1.0,
+        curve: 1,
+        joint_cutoff: 1.0,
+
+    };
+    
+    let ids = Ids {
+        threshold: ui.generate_widget_id(),
+        curve: ui.generate_widget_id(),
+        joint_cutoff: ui.generate_widget_id(),
+        background: ui.generate_widget_id(),
+    };
+
     print!("{}", termion::clear::All);
     Model {
         rx,
@@ -354,11 +432,16 @@ fn model(app: &App) -> Model {
         graphics,
         handles,
         capture,
-        mode: design_mode
+        mode: design_mode,
+        ui,
+        controls,
+        ids,
     }
 }
 
 fn update(app: &App, model: &mut Model, _update: Update) {
+    controls::update(model);
+
     // Update the skeleton.
     if let Some(skeletons) = model.rx.skeletons.try_iter().last() {
         model.current.skeletons = Some(skeletons);
@@ -421,6 +504,12 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         model.current.rgba_image = rgba_image;
         model.current.color = Some(color);
     }
+}
+
+fn ui_view(app: &App, model: &Model, frame: Frame) -> Frame {
+    // Draw the state of the `Ui` to the frame.
+    model.ui.draw_to_frame(app, &frame).unwrap();
+    frame
 }
 
 fn view(app: &App, model: &Model, frame: Frame) -> Frame {
@@ -580,6 +669,7 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
         .unwrap()
         .end_render_pass()
         .expect("failed to add `end_render_pass` command");
+    
 
     frame
 }

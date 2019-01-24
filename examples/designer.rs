@@ -5,7 +5,6 @@ extern crate nuitrack_rs as nuitrack;
 
 use termion;
 use nuitrack_pose_estimation;
-use serde;
 use serde_json;
 use clap;
 
@@ -80,13 +79,15 @@ impl Vertex {
     const MODE_RGBA: u32 = 0;
     const MODE_DEPTH: u32 = 1;
     const MODE_SKELETON: u32 = 2;
-    const MODE_DEBUG: u32 = 3;
+    const MODE_DEBUG_POSE: u32 = 3;
+    const MODE_DEBUG_SKELETON: u32 = 4;
 }
 
 // The most recently received skeletons, depth and color.
 struct Current {
     skeletons: Option<Vec<Skeleton>>,
     debug_poses: Option<Vec<Vector2<f32>>>,
+    debug_skeletons: Option<Vec<Vector2<f32>>>,
     depth: Option<DepthFrame>,
     color: Option<ColorFrame>,
     // The current color image on the GPU.
@@ -99,13 +100,14 @@ struct Receivers {
     depth: mpsc::Receiver<DepthFrame>,
     color: mpsc::Receiver<ColorFrame>,
     nui: mpsc::Sender<bool>,
-    skeleton_debug_rx: mpsc::Receiver<Vec<Vector2>>,
+    skeleton_debug_rx: mpsc::Receiver<(Vec<Vector2>, Vec<Vector2>)>,
 }
 
 #[derive(Clone)]
 enum DesignMode {
     Capture(u64),
-    Test,
+    Test(String, f32),
+    Play,
 }
 
 struct Skeleton {
@@ -131,10 +133,22 @@ fn model(app: &App) -> Model {
              .long("capture")
              .help("Captures a poses after x seconds")
              .takes_value(true))
+        .arg(clap::Arg::with_name("test")
+             .short("t")
+             .long("test")
+             .help("Tests a pose. Pass it the pose name.")
+             .takes_value(true))
+        .arg(clap::Arg::with_name("threshold")
+             .short("h")
+             .long("threshold")
+             .help("Threshold of pose detection.")
+             .takes_value(true))
         .get_matches();
-    let design_mode = match arg_matches.value_of("capture") {
-        Some(s) => DesignMode::Capture(s.parse().unwrap()),
-        None => DesignMode::Test,
+    let design_mode = match (arg_matches.value_of("capture"), arg_matches.value_of("test"), arg_matches.value_of("threshold")) {
+        (Some(s), None, None) => DesignMode::Capture(s.parse().unwrap()),
+        (None, Some(p), Some(t)) => DesignMode::Test(p.to_string(), t.parse().unwrap()),
+        (None, Some(p), None) => DesignMode::Test(p.to_string(), 10.0),
+        _ => DesignMode::Play,
     };
     let window_id = app.new_window()
         .with_dimensions(480 * 2, 640)
@@ -157,7 +171,7 @@ fn model(app: &App) -> Model {
     let (nui_tx, nui_rx) = mpsc::channel();
 
     let detection_test = match design_mode {
-        DesignMode::Test => Some(nuitrack_pose_estimation::Tester::new("STAR".to_string())),
+        DesignMode::Test(ref pose_name, threshold) => nuitrack_pose_estimation::Tester::from_name(pose_name.clone(), threshold, 1),
         _ => None,
     };
     let nui_join_handle = std::thread::spawn(move || {
@@ -169,14 +183,19 @@ fn model(app: &App) -> Model {
 
         nui.skeleton_data(move |data| {
             let mut debug_poses = Vec::new();
+            let mut debug_skeletons = Vec::new();
             let skeletons = data.skeletons()
                 .iter()
                 .map(|skeleton| {
                     if let Some(ref tester) = detection_test {
-                        let (pose, pose_verts) = tester.test(&skeleton);
+                        let (pose, pose_verts, skeleton_verts) = tester.test(&skeleton);
                         debug_poses = pose_verts.iter()
                             .map(|v| vec2(v.x, v.y))
                             .collect();
+                        debug_skeletons = skeleton_verts.iter()
+                            .map(|v| vec2(v.x, v.y))
+                            .collect();
+                        //print!("{}{}", termion::cursor::Goto(1,40), termion::clear::CurrentLine);
                         println!("Pose: {:?}", pose);
                     }
                     Skeleton {
@@ -185,7 +204,7 @@ fn model(app: &App) -> Model {
                 })
                 .collect();
             skeletons_tx.send(skeletons).ok();
-            skeleton_debug_tx.send(debug_poses).ok();
+            skeleton_debug_tx.send((debug_poses, debug_skeletons)).ok();
         }).expect("Failed to add callback");
 
         nui.depth_data(move |data| {
@@ -309,6 +328,7 @@ fn model(app: &App) -> Model {
     let current = Current {
         skeletons: None,
         debug_poses: None,
+        debug_skeletons: None,
         depth: None,
         color: None,
         rgba_image,
@@ -345,8 +365,9 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     }
     
     // Update the skeleton.
-    if let Some(debug_pose) = model.rx.skeleton_debug_rx.try_iter().last() {
+    if let Some((debug_pose, debug_skeleton)) = model.rx.skeleton_debug_rx.try_iter().last() {
         model.current.debug_poses = Some(debug_pose);
+        model.current.debug_skeletons = Some(debug_skeleton);
     }
     
     if let DesignMode::Capture(_) = model.mode {
@@ -465,7 +486,9 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
         //print!("{}", termion::cursor::Goto(1,1));
         for skeleton in skeletons {
             for joint in &skeleton.joints {
-                //println!("{}{:?} x: {2:.2}, y: {3:.2}", clear::CurrentLine, JointType::from_u32(joint.type_), joint.proj.x, joint.proj.y);
+                if let DesignMode::Play = model.mode {
+                    println!("{}{:?} x: {}, y: {}", termion::clear::CurrentLine, JointType::from_u32(joint.type_), joint.proj.x, joint.proj.y);
+                }
                 let w = 8.0 / img_w as f32;
                 let h = 8.0 / img_h as f32;
                 let vs = Rect::from_w_h(w, h)
@@ -488,8 +511,8 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
     let mut debug_vertices = vec![];
     if let Some(ref debug_poses) = model.current.debug_poses {
         for debug_pose in debug_poses {
-            let w = 8.0 / img_w as f32;
-            let h = 8.0 / img_h as f32;
+            let w = 16.0 / img_w as f32;
+            let h = 16.0 / img_h as f32;
             let vs = Rect::from_w_h(w, h)
                 .shift([debug_pose.x - 1.0, debug_pose.y * 2.0 - 1.0].into())
                 .triangles_iter()
@@ -498,13 +521,31 @@ fn view(app: &App, model: &Model, frame: Frame) -> Frame {
                     Vertex {
                         position: [v.x, v.y],
                         tex_coords: [0.0, 0.0],
-                        mode: Vertex::MODE_DEBUG,
+                        mode: Vertex::MODE_DEBUG_POSE,
                     }
                 });
             debug_vertices.extend(vs);
         }
     }
 
+    if let Some(ref debug_skeletons) = model.current.debug_skeletons {
+        for debug_skeleton in debug_skeletons {
+            let w = 16.0 / img_w as f32;
+            let h = 16.0 / img_h as f32;
+            let vs = Rect::from_w_h(w, h)
+                .shift([debug_skeleton.x - 1.0, debug_skeleton.y * 2.0 - 1.0].into())
+                .triangles_iter()
+                .flat_map(|tri| tri.vertices())
+                .map(|v| {
+                    Vertex {
+                        position: [v.x, v.y],
+                        tex_coords: [0.0, 0.0],
+                        mode: Vertex::MODE_DEBUG_SKELETON,
+                    }
+                });
+            debug_vertices.extend(vs);
+        }
+    }
     // Chain all the vertices together ready for vertex buffer creation.
     let vertices = rgba_vertices.iter().cloned()
         .chain(depth_vertices.iter().cloned())
@@ -636,8 +677,10 @@ void main() {
     // Skeleton.
     } else if (mode == uint(2)) {
         f_color = vec4(1.0, 0.2, 0.6, 1.0);
+    } else if (mode == uint(3)) {
+        f_color = vec4(0.2, 1.0, 1.0, 1.0);
     } else {
-        f_color = vec4(0.6, 0.2, 1.0, 1.0);
+        f_color = vec4(1.0, 0.0, 0.0, 1.0);
     }
 }"
     }

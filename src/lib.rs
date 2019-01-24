@@ -10,8 +10,6 @@ use self::nui::{Skeleton, JointType};
 
 pub use self::joints::Joint2DType;
 
-const THRESHOLD: f32 = 3.0;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoseRecord {
     pub name: String,
@@ -23,22 +21,28 @@ pub struct Joint2D(Joint2DType, [f32; 2]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pose {
-    Star,
+    DabR,
+    DabL,
+    HandsUp,
+    Roof,
+    FlyingR,
+    FlyingL,
 }
 
 pub type JointPos = HashMap<JointType, Vec2>;
 
-
 pub struct Detector {
-    poses: HashMap<Pose, Vec<(JointType, Vec2)>>,
+    threshold: f32,
+    curve: i32,
+    poses: HashMap<Pose, JointPos>,
 }
 
 pub struct Tester {
     detector: Detector,
-    name: String,
+    name: Pose,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -65,7 +69,12 @@ impl Vec2 {
 impl Pose {
     fn from_name(name: &str) -> Option<Self> {
         match name {
-            "Star" => Some(Pose::Star),
+            "DabR" => Some(Pose::DabR),
+            "DabL" => Some(Pose::DabL),
+            "HandsUp" => Some(Pose::HandsUp),
+            "Roof" => Some(Pose::Roof),
+            "FlyingR" => Some(Pose::FlyingR),
+            "FlyingL" => Some(Pose::FlyingL),
             _ => None,
         }
     }
@@ -95,7 +104,7 @@ impl std::ops::Add for &Vec2 {
 
 
 impl Detector {
-    pub fn new() -> Self {
+    pub fn new(threshold: f32, curve: i32) -> Self {
         let mut poses = HashMap::new();
         for pose_record in poses::read_poses().into_iter() {
             let PoseRecord {
@@ -107,81 +116,94 @@ impl Detector {
                              data.into_iter().map(|j2d| (joints::j2d_to_j(j2d.0), Vec2::xy(j2d.1[0], j2d.1[1]))).collect());
             }
         }
-        Detector{ poses }
+        Detector{ threshold, poses, curve }
+    }
+    
+    pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
+        let joints = joints_map(skeleton);
+        self.check_poses(joints)
     }
 
-    pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
-        let joints = skeleton
-            .joints()
-            .iter();
+    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> (Option<()>, Vec<Vec2>, Vec<Vec2>) {
+        let mut joints = joints_map(skeleton);
+        let pose = self.poses.get(&name).expect(&format!("Pose {:?} doesn't exist", name));
+        (self.check_pose(pose, &mut joints),
+        pose.iter()
+        .map(|(_, &v)| v)
+        .collect(),
+        joints.iter()
+        .map(|(_, &v)| v)
+        .collect())
+    }
 
-        let mut joint_pos: JointPos = HashMap::new();
-
-        for j in joints {
-            match JointType::from_u32(j.type_) {
-                Some(t) => {
-                    joint_pos.insert(t, Vec2{ x: j.proj.x, y: j.proj.y });
-                },
-                _ => (),
-            }
-        }
-
-        for (name, p) in &self.poses {
-
-            let pose_pos: JointPos = HashMap::from_iter(p.iter().cloned());
-            let pose_pos = if let (Some(torso), Some(pose_torso)) = (joint_pos.get(&JointType::Torso), pose_pos.get(&JointType::Torso)) {
-                allign(&p, torso, pose_torso)
-            } else {
-                pose_pos
-            };
-
-            // JointPos -> Pose -> [Distance]
-            // [Distance] -> closeness: f32
-            let closeness = joint_pos.iter()
-                .filter_map(|(k, v1)| {
-                    pose_pos.get(&k)
-                        .map(|v2| distance(v1, v2))
-                })
-            .fold(0.0, |total, dist| total + dist);
-            if closeness < THRESHOLD {
-                return Some(Pose::Star)
+    fn check_poses(&self, mut joints: JointPos) -> Option<Pose> {
+        for (name, pose) in &self.poses {
+            if let Some(_) = self.check_pose(pose, &mut joints) {
+                return Some(*name);
             }
         }
         None
     }
 
+    fn check_pose(&self, pose: &JointPos, joints: &mut JointPos ) -> Option<()> {
+        let torso = joints.get(&JointType::Torso).map(|&t| t);
+        if let (Some(torso), Some(pose_torso)) =  (torso, pose.get(&JointType::Torso)){
+            allign(joints, &torso, pose_torso);
+            let closeness = joints.iter()
+                .filter_map(|(k, v1)| {
+                    pose.get(&k)
+                        .map(|v2| distance(v1, v2).powi(self.curve))
+                })
+            .fold(0.0, |total, dist| total + dist);
+            if closeness < self.threshold {
+                Some(())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
 }
 
 impl Tester {
-    pub fn new(name: String) -> Self {
-        let detector = Detector::new();
-        //let pose = detector.get_pose(name);
-        Tester{ detector, name }
+    pub fn from_name(name: String, threshold: f32, curve: i32) -> Option<Self> {
+        let detector = Detector::new(threshold, curve);
+        Pose::from_name(&name)
+            .map(|name| Tester{ detector, name })
     }
     
-    pub fn test(&self, skeleton: &Skeleton) -> Option<(String, Vec<Vec2>)> {
-        /*
-        let mut debug_star = Vec::new();
-            debug_star = p.iter()
-                    .map(|(_, v)| v.clone())
-                    .collect();
-                    */
-        unimplemented!()
+    pub fn test(&self, skeleton: &Skeleton) -> (Option<Pose>, Vec<Vec2>, Vec<Vec2>) {
+        let (found, debug_pose, debug_skeleton) =  self.detector.detect_pose(self.name, skeleton);
+        (found.map(|_| self.name), debug_pose, debug_skeleton)
     }
 }
 
-fn allign(pose: &[(JointType, Vec2)], torso: &Vec2, pose_torso: &Vec2) -> HashMap<JointType, Vec2> {
-    let difference = torso - pose_torso;
-    let dp = translate(pose, &difference);
-    HashMap::from_iter(dp.into_iter())
+fn joints_map(skeleton: &Skeleton) -> JointPos {
+    let joints = skeleton
+        .joints()
+        .iter()
+        .map(|j| (JointType::from_u32(j.type_), j))
+        .filter(|(t, _)| t.is_some())
+        .filter(|(_, j)| j.proj.x >= 0.0 && j.proj.x <= 1.0 && j.proj.y >= 0.0 && j.proj.y <= 1.0)
+        .map(|(t, j)| (t.unwrap(), Vec2{ x: j.proj.x, y: j.proj.y }));
+    HashMap::from_iter(joints)
+}
+
+fn allign(skeleton: &mut JointPos, torso: &Vec2, pose_torso: &Vec2){
+    let difference = pose_torso - torso;
+    for (_, v) in skeleton.iter_mut() {
+        let temp = *v;
+        *v = &temp + &difference;
+    }
 }
 
 fn distance(a: &Vec2, b: &Vec2) -> f32 {
-    ((a.x - b.x) + (a.y - b.y)).sqrt()
-}
-
-fn translate(pose: &[(JointType, Vec2)], difference: &Vec2) -> Vec<(JointType, Vec2)> {
-    pose.iter()
-        .map(|(j, v)| (j.clone(), v + difference))
-        .collect()
+    let temp = (a.x - b.x) + (a.y - b.y);
+    if temp >= 0.0 {
+        temp
+    } else {
+        0.0
+    }
 }

@@ -6,4 +6,4 @@ edition = "2018"
 
 [dependencies]
 nuitrack-rs = { path = "../nuitrack-rs" }
-nalgebra = "0.16"
+nalgebra-glm = "0.2"

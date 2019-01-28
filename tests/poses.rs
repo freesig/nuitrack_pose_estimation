@@ -1,12 +1,12 @@
 use nuitrack_pose_estimation as pe;
 use nuitrack_rs;
-use nalgebra as na;
+use nalgebra_glm as glm;
 
 use nuitrack_rs::{JointType, Joint, Orientation, Vector3, SkeletonFeed, feed_to_ptr};
 use pe::{Pose, Settings, PoseData, Detector};
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use na::Point2;
+use glm::Vec2;
 
 
 const DAB_R: (&'static str, [(JointType, (f32, f32)); 2]) = ("DabR", 
@@ -20,13 +20,13 @@ const DAB_R: (&'static str, [(JointType, (f32, f32)); 2]) = ("DabR",
 
 fn dab_r() -> PoseData {
     let name = Pose::DabR;
-    let pose = HashMap::from_iter(DAB_R.1.iter().map(|&(ty, (x, y))| (ty, Point2::new(x, y))));
+    let pose = HashMap::from_iter(DAB_R.1.iter().map(|&(ty, (x, y))| (ty, glm::vec2(x, y))));
     let mut poses = HashMap::new();
     poses.insert(name, pose);
     poses
 }
 
-fn skeleton(joints: &[(u32, Point2<f32>)]) -> SkeletonFeed {
+fn skeleton(joints: &[(u32, Vec2)]) -> SkeletonFeed {
     let orient = Orientation {
         matrix: [1.0; 9],
     };
@@ -48,8 +48,8 @@ fn skeleton(joints: &[(u32, Point2<f32>)]) -> SkeletonFeed {
 #[test]
 fn match_identity() {
     let mock_skeleton = vec![
-        (3, Point2::new(0.5645727, 0.5913842)),
-        (6, Point2::new(0.68835175, 0.49775392))
+        (3, glm::vec2(0.5645727, 0.5913842)),
+        (6, glm::vec2(0.68835175, 0.49775392))
     ];
     let settings = Settings {
         joint_cutoff: 0.01,
@@ -64,8 +64,8 @@ fn match_identity() {
 #[test]
 fn match_close() {
     let mock_skeleton = vec![
-        (3, Point2::new(0.5645727, 0.5913842)),
-        (6, Point2::new(0.68845175, 0.49775392))
+        (3, glm::vec2(0.5645727, 0.5913842)),
+        (6, glm::vec2(0.68845175, 0.49775392))
     ];
     let settings = Settings {
         joint_cutoff: 0.01,
@@ -80,8 +80,8 @@ fn match_close() {
 #[test]
 fn nomatch_joint_cutoff() {
     let mock_skeleton = vec![
-        (3, Point2::new(0.5645727, 0.5913842)),
-        (6, Point2::new(0.70845175, 0.51775392))
+        (3, glm::vec2(0.5645727, 0.5913842)),
+        (6, glm::vec2(0.70845175, 0.51775392))
     ];
     let settings = Settings {
         joint_cutoff: 0.01,
@@ -91,4 +91,36 @@ fn nomatch_joint_cutoff() {
     let tester = Detector::with_poses(settings, dab_r());
     let result = tester.detect(&skeleton_ptr[0]);
     assert_eq!(result, None);
+}
+
+#[test]
+fn match_allign() {
+    let mock_skeleton = vec![
+        (3, glm::vec2(0.6645727, 0.6913842)),
+        (6, glm::vec2(0.78835175, 0.59775392))
+    ];
+    let settings = Settings {
+        joint_cutoff: 0.01,
+    };
+    let skeleton = vec![skeleton(&mock_skeleton)];
+    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let tester = Detector::with_poses(settings, dab_r());
+    let result = tester.detect(&skeleton_ptr[0]);
+    assert_eq!(result, Some(Pose::DabR));
+}
+
+#[test]
+fn match_scale() {
+    let mock_skeleton = vec![
+        (3, glm::vec2(0.5645727, 0.5913842)),
+        (6, glm::vec2(0.78835175, 0.59775392))
+    ];
+    let settings = Settings {
+        joint_cutoff: 0.01,
+    };
+    let skeleton = vec![skeleton(&mock_skeleton)];
+    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let tester = Detector::with_poses(settings, dab_r());
+    let result = tester.detect(&skeleton_ptr[0]);
+    assert_eq!(result, Some(Pose::DabR));
 }

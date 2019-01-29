@@ -1,11 +1,13 @@
 use nuitrack_rs as nui;
 use nalgebra_glm as glm;
+use nalgebra as na;
 
-use glm::{Mat2x4, Vec2};
+use glm::{Vec2, Mat2x4, Mat2x2};
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use self::nui::{Skeleton, JointType};
 use std::cmp::Ordering::Equal;
+use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pose {
@@ -24,6 +26,12 @@ pub type JointPos = HashMap<JointType, Vec2>;
 pub struct Detector {
     pub settings: Settings,
     poses: PoseData,
+    lasts: Lasts,
+}
+
+struct Lasts {
+    skeleton: RefCell<Option<Vec<Vec2>>>,
+    pose: RefCell<Option<Vec<Vec2>>>,
 }
 
 pub struct Settings {
@@ -32,7 +40,7 @@ pub struct Settings {
 }
 
 pub struct Tester {
-    detector: Detector,
+    pub detector: Detector,
     name: Pose,
 }
 
@@ -52,7 +60,11 @@ impl Pose {
 
 impl Detector {
     pub fn with_poses(settings: Settings, poses: PoseData) -> Self {
-        Detector{ poses, settings }
+        let lasts = Lasts {
+            skeleton: RefCell::new(None),
+            pose: RefCell::new(None),
+        };
+        Detector{ poses, settings, lasts }
     }
     
     pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
@@ -64,12 +76,9 @@ impl Detector {
         let mut joints = joints_map(skeleton);
         let pose = self.poses.get(&name).expect(&format!("Pose {:?} doesn't exist", name));
         (self.check_pose(pose, &mut joints),
-        pose.iter()
-        .map(|(_, &v)| v)
-        .collect(),
-        joints.iter()
-        .map(|(_, &v)| v)
-        .collect())
+        self.lasts.skeleton.borrow().clone().unwrap_or(Vec::new()),
+        self.lasts.pose.borrow().clone().unwrap_or(Vec::new())
+        )
     }
 
     fn check_poses(&self, mut joints: JointPos) -> Option<Pose> {
@@ -88,17 +97,19 @@ impl Detector {
     }
 
     fn check_pose(&self, pose: &JointPos, joints: &JointPos ) -> Option<f32> {
-        if let (Ok(mut pose_arms), Ok(joints_arms)) =  (arms(pose), arms(joints)){
+        if let (Ok(mut pose_arms), Ok(mut joints_arms)) =  (arms(pose), arms(joints)){
             let rotations: Vec<f32> = pose_arms.iter_mut()
-                .zip(joints_arms.iter())
+                .zip(joints_arms.iter_mut())
                 .map(|(pose_arm, joints_arm)| kabsch(pose_arm, joints_arm))
                 .filter(Option::is_some)
                 .map(Option::unwrap)
-                .filter(|r| r >= &self.settings.rotation_cutoff)
+                .filter(|r| r.abs() <= self.settings.rotation_cutoff)
                 .collect();
             if rotations.len() <= 0 {
                 return None;
             }
+            self.lasts.skeleton.replace(Some(joints_arms[0].iter().cloned().chain(joints_arms[1].iter().cloned()).collect()));
+            self.lasts.pose.replace(Some(pose_arms[0].iter().cloned().chain(pose_arms[1].iter().cloned()).collect()));
 
             let furthest_point = pose_arms.into_iter()
                 .zip(joints_arms.into_iter())
@@ -108,6 +119,7 @@ impl Detector {
                         .map(|(v1, v2)| glm::distance(&v1, &v2))
                 })
             .max_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
+            //println!("furthest_point: {:?}", furthest_point);
             match furthest_point {
                 Some(fp) if fp < self.settings.joint_cutoff => Some(fp),
                 _ => None,
@@ -120,9 +132,6 @@ impl Detector {
 }
 
 impl Tester {
-    pub fn set_joint_cutoff(&mut self, joint_cutoff: f32) {
-        self.detector.settings.joint_cutoff = joint_cutoff;
-    }
     pub fn test_pose(settings: Settings, name: Pose, pose: JointPos) -> Self {
         let mut poses = HashMap::new();
         poses.insert(name, pose);
@@ -152,9 +161,6 @@ fn joints_map(skeleton: &Skeleton) -> JointPos {
 
 fn available_joints(joint_type: &JointType) -> bool {
     match joint_type {
-            //JointType::Head |
-            //JointType::Neck |
-            JointType::Torso |
             JointType::LeftShoulder |
             JointType::LeftElbow |
             JointType::LeftWrist |
@@ -183,30 +189,48 @@ fn arms(joints: &JointPos) -> Result<Vec<Vec<Vec2>>, JointMissing> {
     Ok(vec![right, left])
 }
 
-fn kabsch(a: &mut [Vec2], b: &[Vec2]) -> Option<f32> {
+fn kabsch(a: &mut [Vec2], b: &mut [Vec2]) -> Option<f32> {
+    let scale = get_scale(a, b);
+    let scale = if scale.is_none() { return scale; } else { scale.unwrap() };
+
+    let mut ma = make_mat(a);
+    ma /= scale;
+
+    let mut mb = make_mat(b);
+
+    center(&mut ma, &mut mb);
+
+    write_joints(b, &mb);
+
+    rotation_matrix(&ma, &mb)
+        .map(|(r, angle)| {
+            let mad = r * ma;
+            write_joints(a, &mad);
+            angle
+        })
+}
+
+fn get_scale(a: &[Vec2], b: &[Vec2]) -> Option<f32> {
     let (mut total_a, mut total_b) = (0.0, 0.0);
     for i in 0..(a.len() - 1) {
         total_a += glm::l2_norm(&(a[i+1] - a[i]));
         total_b += glm::l2_norm(&(b[i+1] - b[i]));
     }
-
     if total_a <= 0.0 || total_b <= 0.0 {
-        return None;
+        None
+    } else {
+        Some(total_a / total_b)
     }
+}
 
-    let scale = total_a / total_b;
+fn make_mat(a: &[Vec2]) -> Mat2x4 {
     let ma: Vec<f32> = a.iter()
         .flat_map(|n| n.into_iter().map(|&i|i))
         .collect();
-    let mut ma = glm::make_mat2x4(&ma[..]);
-    ma /= scale;
-    let mb: Vec<f32> = b.iter()
-        .flat_map(|n| n.into_iter().map(|&i|i))
-        .collect();
-    let mut mb = glm::make_mat2x4(&mb[..]);
-    mb /= scale;
+    glm::make_mat2x4(&ma[..])
+}
 
-
+fn center(ma: &mut Mat2x4, mb: &mut Mat2x4) {
     let mut a_ctr = glm::vec2(0.0, 0.0);
     let mut b_ctr = glm::vec2(0.0, 0.0);
 
@@ -219,12 +243,20 @@ fn kabsch(a: &mut [Vec2], b: &[Vec2]) -> Option<f32> {
     for i in 0..4 {
         let mut col_a = glm::column(&ma, i);
         col_a -= a_ctr;
-        ma = glm::set_column(&ma, i, &col_a);
+        *ma = glm::set_column(&ma, i, &col_a);
         let mut col_b = glm::column(&mb, i);
         col_b -= b_ctr;
-        mb = glm::set_column(&mb, i, &col_b);
+        *mb = glm::set_column(&mb, i, &col_b);
     }
+}
 
+fn write_joints(a: &mut [Vec2], m: &Mat2x4) {
+    for (n, v) in a.iter_mut().enumerate() {
+        *v = Vec2::from(m.column(n));
+    }
+}
+
+fn rotation_matrix(ma: &Mat2x4, mb: &Mat2x4) -> Option<(Mat2x2, f32)> {
     let cov = mb * ma.transpose();
     let svd = cov.svd(true, true);
 
@@ -237,22 +269,8 @@ fn kabsch(a: &mut [Vec2], b: &[Vec2]) -> Option<f32> {
         let i = glm::set_column(&i, 1, &col_i);
 
         let r = v * i * u.transpose();
-        let mad: () = glm::column(&ma, 0);
-
-    } else {
-        return None
-    };
-
-    unimplemented!()
+        let rot = na::Rotation2::from_matrix_unchecked(r);
+        Some((r, rot.angle()))
+    } else { None }
 }
-
-/*
-fn allign(skeleton: &mut JointPos, torso: &Vec2, pose_torso: &Vec2){
-    let difference = pose_torso - torso;
-    for (_, v) in skeleton.iter_mut() {
-        let temp = *v;
-        *v = &temp + &difference;
-    }
-}
-*/
 

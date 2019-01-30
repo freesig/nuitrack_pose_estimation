@@ -26,12 +26,15 @@ pub type JointPos = HashMap<JointType, Vec2>;
 pub struct Detector {
     pub settings: Settings,
     poses: PoseData,
-    lasts: Lasts,
+    pub lasts: Lasts,
 }
 
-struct Lasts {
-    skeleton: RefCell<Option<Vec<Vec2>>>,
-    pose: RefCell<Option<Vec<Vec2>>>,
+pub struct Lasts {
+    pub capture: bool,
+    pub skeleton: RefCell<Option<Vec<Vec<Vec2>>>>,
+    pub pose: RefCell<Option<Vec<Vec<Vec2>>>>,
+    pub max_dist: RefCell<Option<f32>>,
+    pub rotations: RefCell<Option<Vec<f32>>>,
 }
 
 pub struct Settings {
@@ -61,8 +64,11 @@ impl Pose {
 impl Detector {
     pub fn with_poses(settings: Settings, poses: PoseData) -> Self {
         let lasts = Lasts {
+            capture: false,
             skeleton: RefCell::new(None),
             pose: RefCell::new(None),
+            rotations: RefCell::new(None),
+            max_dist: RefCell::new(None),
         };
         Detector{ poses, settings, lasts }
     }
@@ -72,13 +78,10 @@ impl Detector {
         self.check_poses(joints)
     }
 
-    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> (Option<f32>, Vec<Vec2>, Vec<Vec2>) {
+    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> Option<f32> {
         let mut joints = joints_map(skeleton);
         let pose = self.poses.get(&name).expect(&format!("Pose {:?} doesn't exist", name));
-        (self.check_pose(pose, &mut joints),
-        self.lasts.skeleton.borrow().clone().unwrap_or(Vec::new()),
-        self.lasts.pose.borrow().clone().unwrap_or(Vec::new())
-        )
+        self.check_pose(pose, &mut joints)
     }
 
     fn check_poses(&self, mut joints: JointPos) -> Option<Pose> {
@@ -108,8 +111,10 @@ impl Detector {
             if rotations.len() <= 0 {
                 return None;
             }
-            self.lasts.skeleton.replace(Some(joints_arms[0].iter().cloned().chain(joints_arms[1].iter().cloned()).collect()));
-            self.lasts.pose.replace(Some(pose_arms[0].iter().cloned().chain(pose_arms[1].iter().cloned()).collect()));
+
+            if self.lasts.capture {
+                self.debug(&joints_arms, &pose_arms);
+            }
 
             let furthest_point = pose_arms.into_iter()
                 .zip(joints_arms.into_iter())
@@ -119,7 +124,9 @@ impl Detector {
                         .map(|(v1, v2)| glm::distance(&v1, &v2))
                 })
             .max_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
-            //println!("furthest_point: {:?}", furthest_point);
+            if self.lasts.capture {
+                self.debug_info(&rotations, &furthest_point);
+            }
             match furthest_point {
                 Some(fp) if fp < self.settings.joint_cutoff => Some(fp),
                 _ => None,
@@ -129,21 +136,33 @@ impl Detector {
         }
     }
 
+    fn debug(&self, joints_arms: &Vec<Vec<Vec2>>, pose_arms: &Vec<Vec<Vec2>>) {
+        self.lasts.skeleton.replace(Some(joints_arms.clone()));
+        self.lasts.pose.replace(Some(pose_arms.clone()));
+    }
+
+    fn debug_info(&self, rotations: &Vec<f32>, furthest_point: &Option<f32>) {
+        self.lasts.max_dist.replace(furthest_point.clone());
+        self.lasts.rotations.replace(Some(rotations.clone()));
+    }
+
 }
 
 impl Tester {
     pub fn test_pose(settings: Settings, name: Pose, pose: JointPos) -> Self {
         let mut poses = HashMap::new();
         poses.insert(name, pose);
+        let mut detector = Detector::with_poses(settings, poses);
+        detector.lasts.capture = true;
         Tester {
             name,
-            detector: Detector::with_poses(settings, poses),
+            detector,
         }
     }
     
-    pub fn test(&self, skeleton: &Skeleton) -> (Option<Pose>, Vec<Vec2>, Vec<Vec2>) {
-        let (found, debug_pose, debug_skeleton) =  self.detector.detect_pose(self.name, skeleton);
-        (found.map(|_| self.name), debug_pose, debug_skeleton)
+    pub fn test(&self, skeleton: &Skeleton) -> Option<Pose> {
+        let found  =  self.detector.detect_pose(self.name, skeleton);
+        found.map(|_| self.name) 
     }
 }
 

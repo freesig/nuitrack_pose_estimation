@@ -1,14 +1,16 @@
-use nuitrack_rs as nui;
-use nalgebra_glm as glm;
 use nalgebra as na;
+use nalgebra_glm as glm;
+use nuitrack_rs as nui;
 
-use glm::{Vec2, Mat2x2};
+mod poses;
+
+use self::nui::{JointType, Skeleton};
+use glm::{Mat2x2, Vec2};
 use na::MatrixMN;
+use std::cell::RefCell;
+use std::cmp::Ordering::Equal;
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use self::nui::{Skeleton, JointType};
-use std::cmp::Ordering::Equal;
-use std::cell::RefCell;
 
 type Mat2x8 = MatrixMN<f32, na::U2, na::U8>;
 
@@ -65,6 +67,22 @@ impl Pose {
 }
 
 impl Detector {
+    pub fn new(settings: Settings) -> Self {
+        let lasts = Lasts {
+            capture: false,
+            skeleton: RefCell::new(None),
+            pose: RefCell::new(None),
+            rotations: RefCell::new(None),
+            max_dist: RefCell::new(None),
+        };
+        let poses = poses::load();
+        Detector {
+            poses,
+            settings,
+            lasts,
+        }
+    }
+
     pub fn with_poses(settings: Settings, poses: PoseData) -> Self {
         let lasts = Lasts {
             capture: false,
@@ -73,9 +91,13 @@ impl Detector {
             rotations: RefCell::new(None),
             max_dist: RefCell::new(None),
         };
-        Detector{ poses, settings, lasts }
+        Detector {
+            poses,
+            settings,
+            lasts,
+        }
     }
-    
+
     pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
         let joints = joints_map(skeleton);
         self.check_poses(joints)
@@ -83,7 +105,10 @@ impl Detector {
 
     fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> Option<f32> {
         let mut joints = joints_map(skeleton);
-        let pose = self.poses.get(&name).expect(&format!("Pose {:?} doesn't exist", name));
+        let pose = self
+            .poses
+            .get(&name)
+            .expect(&format!("Pose {:?} doesn't exist", name));
         self.check_pose(pose, &mut joints)
     }
 
@@ -96,14 +121,13 @@ impl Detector {
                     estimation = Some(*name);
                     max_closeness = closeness;
                 }
-
             }
         }
         estimation
     }
 
-    fn check_pose(&self, pose: &JointPos, joints: &JointPos ) -> Option<f32> {
-        if let (Ok(mut pose_arms), Ok(mut joints_arms)) =  (arms(pose), arms(joints)){
+    fn check_pose(&self, pose: &JointPos, joints: &JointPos) -> Option<f32> {
+        if let (Ok(mut pose_arms), Ok(mut joints_arms)) = (arms(pose), arms(joints)) {
             let rotation = if let Some(rotation) = kabsch(&mut pose_arms, &mut joints_arms) {
                 if rotation.abs() <= self.settings.rotation_cutoff {
                     rotation
@@ -118,7 +142,8 @@ impl Detector {
                 self.debug(&joints_arms, &pose_arms);
             }
 
-            let furthest_point = pose_arms.into_iter()
+            let furthest_point = pose_arms
+                .into_iter()
                 .zip(joints_arms.into_iter())
                 .map(|(v1, v2)| glm::distance(&v1, &v2))
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(Equal));
@@ -143,7 +168,6 @@ impl Detector {
         self.lasts.max_dist.replace(furthest_point.clone());
         self.lasts.rotations.replace(Some(rotation));
     }
-
 }
 
 impl Tester {
@@ -152,15 +176,12 @@ impl Tester {
         poses.insert(name, pose);
         let mut detector = Detector::with_poses(settings, poses);
         detector.lasts.capture = true;
-        Tester {
-            name,
-            detector,
-        }
+        Tester { name, detector }
     }
-    
+
     pub fn test(&self, skeleton: &Skeleton) -> Option<Pose> {
-        let found  =  self.detector.detect_pose(self.name, skeleton);
-        found.map(|_| self.name) 
+        let found = self.detector.detect_pose(self.name, skeleton);
+        found.map(|_| self.name)
     }
 }
 
@@ -178,15 +199,15 @@ fn joints_map(skeleton: &Skeleton) -> JointPos {
 
 fn available_joints(joint_type: &JointType) -> bool {
     match joint_type {
-            JointType::LeftShoulder |
-            JointType::LeftElbow |
-            JointType::LeftWrist |
-            JointType::LeftHand |
-            JointType::RightShoulder |
-            JointType::RightElbow |
-            JointType::RightWrist |
-            JointType::RightHand => true,
-            _ => false,
+        JointType::LeftShoulder
+        | JointType::LeftElbow
+        | JointType::LeftWrist
+        | JointType::LeftHand
+        | JointType::RightShoulder
+        | JointType::RightElbow
+        | JointType::RightWrist
+        | JointType::RightHand => true,
+        _ => false,
     }
 }
 
@@ -194,21 +215,51 @@ struct JointMissing;
 
 /// Arms in order
 fn arms(joints: &JointPos) -> Result<Vec<Vec2>, JointMissing> {
-    let arms = vec![joints.get(&JointType::RightShoulder).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::RightElbow).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::RightWrist).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::RightHand).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::LeftShoulder).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::LeftElbow).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::LeftWrist).map(|&j|j).ok_or(JointMissing)?,
-        joints.get(&JointType::LeftHand).map(|&j|j).ok_or(JointMissing)?];
-    
+    let arms = vec![
+        joints
+            .get(&JointType::RightShoulder)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::RightElbow)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::RightWrist)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::RightHand)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::LeftShoulder)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::LeftElbow)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::LeftWrist)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+        joints
+            .get(&JointType::LeftHand)
+            .map(|&j| j)
+            .ok_or(JointMissing)?,
+    ];
+
     Ok(arms)
 }
 
 fn kabsch(a: &mut [Vec2], b: &mut [Vec2]) -> Option<f32> {
     let scale = get_scale(a, b);
-    let scale = if scale.is_none() { return scale; } else { scale.unwrap() };
+    let scale = if scale.is_none() {
+        return scale;
+    } else {
+        scale.unwrap()
+    };
 
     let mut ma = make_mat(a);
     ma /= scale;
@@ -219,19 +270,18 @@ fn kabsch(a: &mut [Vec2], b: &mut [Vec2]) -> Option<f32> {
 
     write_joints(b, &mb);
 
-    rotation_matrix(&ma, &mb)
-        .map(|(r, angle)| {
-            let mad = r * ma;
-            write_joints(a, &mad);
-            angle
-        })
+    rotation_matrix(&ma, &mb).map(|(r, angle)| {
+        let mad = r * ma;
+        write_joints(a, &mad);
+        angle
+    })
 }
 
 fn get_scale(a: &[Vec2], b: &[Vec2]) -> Option<f32> {
     let (mut total_a, mut total_b) = (0.0, 0.0);
     for i in 0..(a.len() - 1) {
-        total_a += glm::l2_norm(&(a[i+1] - a[i]));
-        total_b += glm::l2_norm(&(b[i+1] - b[i]));
+        total_a += glm::l2_norm(&(a[i + 1] - a[i]));
+        total_b += glm::l2_norm(&(b[i + 1] - b[i]));
     }
     if total_a <= 0.0 || total_b <= 0.0 {
         None
@@ -285,6 +335,7 @@ fn rotation_matrix(ma: &Mat2x8, mb: &Mat2x8) -> Option<(Mat2x2, f32)> {
         let r = v * i * u.transpose();
         let rot = na::Rotation2::from_matrix_unchecked(r);
         Some((r, rot.angle()))
-    } else { None }
+    } else {
+        None
+    }
 }
-

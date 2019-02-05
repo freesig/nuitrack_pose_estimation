@@ -1,25 +1,26 @@
+use nalgebra_glm as glm;
 use nuitrack_pose_estimation as pe;
 use nuitrack_rs;
-use nalgebra_glm as glm;
 
-use nuitrack_rs::{JointType, Joint, Orientation, Vector3, SkeletonFeed, feed_to_ptr};
-use pe::{Pose, Settings, PoseData, Detector};
+use glm::Vec2;
+use nuitrack_rs::{feed_to_ptr, Joint, JointType, Orientation, SkeletonFeed, Vector3};
+use pe::{Detector, Pose, PoseData, Settings};
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use glm::Vec2;
 
-
-const DAB_R: (&'static str, [(JointType, (f32, f32)); 8]) = ("DabR", 
-                                                       [
-                                                       (JointType::LeftShoulder, (0.68835175, 0.49775392)),
-                                                       (JointType::LeftElbow, (0.5864927,0.5303629)),
-                                                       (JointType::LeftWrist, (0.45776764,0.40316057)),
-                                                       (JointType::LeftHand, (0.43292272,0.37860954)),
-                                                       (JointType::RightShoulder, (0.51725876,0.48693466)),
-                                                       (JointType::RightElbow, (0.3500515,0.41818976)),
-                                                       (JointType::RightWrist, (0.20907341,0.3226182)),
-                                                       (JointType::RightHand, (0.1777911,0.30141133)),
-                                                       ]);
+const DAB_R: (&'static str, [(JointType, (f32, f32)); 8]) = (
+    "DabR",
+    [
+        (JointType::LeftShoulder, (0.68835175, 0.49775392)),
+        (JointType::LeftElbow, (0.5864927, 0.5303629)),
+        (JointType::LeftWrist, (0.45776764, 0.40316057)),
+        (JointType::LeftHand, (0.43292272, 0.37860954)),
+        (JointType::RightShoulder, (0.51725876, 0.48693466)),
+        (JointType::RightElbow, (0.3500515, 0.41818976)),
+        (JointType::RightWrist, (0.20907341, 0.3226182)),
+        (JointType::RightHand, (0.1777911, 0.30141133)),
+    ],
+);
 /*
 {"name":"DabR","data":[["Head",[0.5808275,0.42642814]],["Neck",[0.58105177,0.45120373]],["Torso",[0.5645727,0.5913842]],["Waist",[0.5587295,0.68986714]],["LeftCollar",[0.5765486,0.4895107]],["LeftShoulder",[0.68835175,0.49775392]],["LeftElbow",[0.5864927,0.5303629]],["LeftWrist",[0.45776764,0.40316057]],["LeftHand",[0.43292272,0.37860954]],["LeftFingertip",[0.0,0.0]],["RightCollar",[0.5765486,0.4895107]],["RightShoulder",[0.51725876,0.48693466]],["RightElbow",[0.3500515,0.41818976]],["RightWrist",[0.20907341,0.3226182]],["RightHand",[0.1777911,0.30141133]],["RightFingertip",[0.0,0.0]],["LeftHip",[0.6397388,0.70486915]],["LeftKnee",[0.6397388,0.91291016]],["LeftAnkle",[0.6397388,1.1086042]],["LeftFoot",[0.0,0.0]],["RightHip",[0.4802191,0.7070243]],["RightKnee",[0.4802191,0.90910274]],["RightAnkle",[0.4802191,1.099188]],["RightFoot",[0.0,0.0]]]}
 */
@@ -33,34 +34,38 @@ fn dab_r() -> PoseData {
 }
 
 fn skeleton(joints: &[(u32, Vec2)]) -> SkeletonFeed {
-    let orient = Orientation {
-        matrix: [1.0; 9],
-    };
-    let joints = joints.iter()
+    let orient = Orientation { matrix: [1.0; 9] };
+    let joints = joints
+        .iter()
         .map(|&(type_, v)| Joint {
             type_,
             confidence: 1.0,
-            orient, 
-            proj: Vector3{ x: v.x, y: v.y, z: 0.0 },
-            real: Vector3{ x: 0.0, y: 0.0, z: 0.0 },
+            orient,
+            proj: Vector3 {
+                x: v.x,
+                y: v.y,
+                z: 0.0,
+            },
+            real: Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
         })
-    .collect();
-    SkeletonFeed {
-        id: 1,
-        joints,
-    }
+        .collect();
+    SkeletonFeed { id: 1, joints }
 }
 
-fn identity_mock() -> Vec<(u32, Vec2)>{
+fn identity_mock() -> Vec<(u32, Vec2)> {
     vec![
         (6, glm::vec2(0.68835175, 0.49775392)),
-        (7, glm::vec2(0.5864927,0.5303629)),
-        (8, glm::vec2(0.45776764,0.40316057)),
-        (9, glm::vec2(0.43292272,0.37860954)),
-        (12, glm::vec2(0.51725876,0.48693466)),
-        (13, glm::vec2(0.3500515,0.41818976)),
-        (14, glm::vec2(0.20907341,0.3226182)),
-        (15, glm::vec2(0.1777911,0.30141133)),
+        (7, glm::vec2(0.5864927, 0.5303629)),
+        (8, glm::vec2(0.45776764, 0.40316057)),
+        (9, glm::vec2(0.43292272, 0.37860954)),
+        (12, glm::vec2(0.51725876, 0.48693466)),
+        (13, glm::vec2(0.3500515, 0.41818976)),
+        (14, glm::vec2(0.20907341, 0.3226182)),
+        (15, glm::vec2(0.1777911, 0.30141133)),
     ]
 }
 
@@ -81,9 +86,9 @@ fn match_identity() {
 #[test]
 fn match_close() {
     let mut mock_skeleton = identity_mock();
-    mock_skeleton[5].1 = glm::vec2(0.3501515,0.41818976);
-    mock_skeleton[6].1 = glm::vec2(0.20917341,0.3226182);
-    mock_skeleton[7].1 = glm::vec2(0.1778911,0.30141133);
+    mock_skeleton[5].1 = glm::vec2(0.3501515, 0.41818976);
+    mock_skeleton[6].1 = glm::vec2(0.20917341, 0.3226182);
+    mock_skeleton[7].1 = glm::vec2(0.1778911, 0.30141133);
     let settings = Settings {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
@@ -98,9 +103,9 @@ fn match_close() {
 #[test]
 fn nomatch_joint_cutoff() {
     let mut mock_skeleton = identity_mock();
-    mock_skeleton[5].1 = glm::vec2(0.4500515,0.41818976);
-    mock_skeleton[6].1 = glm::vec2(0.30907341,0.3226182);
-    mock_skeleton[7].1 = glm::vec2(0.2777911,0.30141133);
+    mock_skeleton[5].1 = glm::vec2(0.4500515, 0.41818976);
+    mock_skeleton[6].1 = glm::vec2(0.30907341, 0.3226182);
+    mock_skeleton[7].1 = glm::vec2(0.2777911, 0.30141133);
     let settings = Settings {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,

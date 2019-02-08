@@ -5,14 +5,6 @@ authors = ["freesig <tomrgowan@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-nuitrack-rs = { path = "../nuitrack-rs" }
-
-[dev-dependencies]
-nannou = { path = "../nannou" }
-vulkano = "0.11.1"
-vulkano-shaders = { git = "https://github.com/mitchmindtree/vulkano", branch = "nannou_patches" }
-termion = "1"
-
-
-[replace]
-"vulkano:0.11.1" = { git = "https://github.com/mitchmindtree/vulkano", branch = "nannou_patches" }
+nuitrack-rs = { git = "https://github.com/freesig/nuitrack-rs.git" }
+nalgebra = "0.16"
+nalgebra-glm = "0.2"

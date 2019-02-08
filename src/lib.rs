@@ -66,7 +66,19 @@ impl Pose {
     }
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            joint_cutoff: 0.13,
+            rotation_cutoff: 0.22,
+        }
+    }
+}
+
 impl Detector {
+    /// Create a new detector with settings
+    /// Settings can be set to default
+    /// This will use the default poses
     pub fn new(settings: Settings) -> Self {
         let lasts = Lasts {
             capture: false,
@@ -83,6 +95,7 @@ impl Detector {
         }
     }
 
+    /// Create a detector with custom poses
     pub fn with_poses(settings: Settings, poses: PoseData) -> Self {
         let lasts = Lasts {
             capture: false,
@@ -98,6 +111,7 @@ impl Detector {
         }
     }
 
+    /// Detect if there is a pose in this skeleton
     pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
         let joints = joints_map(skeleton);
         self.check_poses(joints)

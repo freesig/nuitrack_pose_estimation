@@ -5,6 +5,6 @@ authors = ["freesig <tomrgowan@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-nuitrack-rs = { path = "../nuitrack-rs" }
+nuitrack-rs = { git = "https://github.com/freesig/nuitrack-rs.git" }
 nalgebra = "0.16"
 nalgebra-glm = "0.2"

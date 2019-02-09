@@ -34,6 +34,7 @@ pub struct Detector {
     pub lasts: Lasts,
 }
 
+#[derive(Default)]
 pub struct Lasts {
     pub capture: bool,
     pub skeleton: RefCell<Option<Vec<Vec2>>>,
@@ -66,6 +67,12 @@ impl Pose {
     }
 }
 
+impl Default for Detector {
+    fn default() -> Self {
+        Self::new(Settings::default())
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -80,30 +87,12 @@ impl Detector {
     /// Settings can be set to default
     /// This will use the default poses
     pub fn new(settings: Settings) -> Self {
-        let lasts = Lasts {
-            capture: false,
-            skeleton: RefCell::new(None),
-            pose: RefCell::new(None),
-            rotations: RefCell::new(None),
-            max_dist: RefCell::new(None),
-        };
-        let poses = poses::load();
-        Detector {
-            poses,
-            settings,
-            lasts,
-        }
+        Self::with_poses(settings, poses::load())
     }
 
     /// Create a detector with custom poses
     pub fn with_poses(settings: Settings, poses: PoseData) -> Self {
-        let lasts = Lasts {
-            capture: false,
-            skeleton: RefCell::new(None),
-            pose: RefCell::new(None),
-            rotations: RefCell::new(None),
-            max_dist: RefCell::new(None),
-        };
+        let lasts = Lasts::default();
         Detector {
             poses,
             settings,

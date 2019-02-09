@@ -40,7 +40,7 @@ fn main() -> io::Result<()> {
             }
         }
         for skeleton in data.skeletons() {
-            println!("Detecting {:?}", detector.detect(&skeleton));
+            println!("Detecting {:?}", detector.detect(skeleton.joints()));
         }
     }).expect("Failed to create skeleton callback");
 

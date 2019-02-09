@@ -4,7 +4,7 @@ use nuitrack_rs as nui;
 
 mod poses;
 
-use self::nui::{JointType, Skeleton};
+use self::nui::{Joint, JointType};
 use glm::{Mat2x2, Vec2};
 use na::MatrixMN;
 use std::cell::RefCell;
@@ -112,12 +112,12 @@ impl Detector {
     }
 
     /// Detect if there is a pose in this skeleton
-    pub fn detect(&self, skeleton: &Skeleton) -> Option<Pose> {
+    pub fn detect(&self, skeleton: &[Joint]) -> Option<Pose> {
         let joints = joints_map(skeleton);
         self.check_poses(joints)
     }
 
-    fn detect_pose(&self, name: Pose, skeleton: &Skeleton) -> Option<f32> {
+    fn detect_pose(&self, name: Pose, skeleton: &[Joint]) -> Option<f32> {
         let mut joints = joints_map(skeleton);
         let pose = self
             .poses
@@ -193,15 +193,14 @@ impl Tester {
         Tester { name, detector }
     }
 
-    pub fn test(&self, skeleton: &Skeleton) -> Option<Pose> {
+    pub fn test(&self, skeleton: &[Joint]) -> Option<Pose> {
         let found = self.detector.detect_pose(self.name, skeleton);
         found.map(|_| self.name)
     }
 }
 
-fn joints_map(skeleton: &Skeleton) -> JointPos {
+fn joints_map(skeleton: &[Joint]) -> JointPos {
     let joints = skeleton
-        .joints()
         .iter()
         .map(|j| (JointType::from_u32(j.type_), j))
         .filter(|(t, _)| t.is_some())

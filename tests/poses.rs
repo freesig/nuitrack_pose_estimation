@@ -3,7 +3,7 @@ use nuitrack_pose_estimation as pe;
 use nuitrack_rs;
 
 use glm::Vec2;
-use nuitrack_rs::{feed_to_ptr, Joint, JointType, Orientation, SkeletonFeed, Vector3};
+use nuitrack_rs::{Joint, JointType, Orientation, SkeletonFeed, Vector3};
 use pe::{Detector, Pose, PoseData, Settings};
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -76,10 +76,9 @@ fn match_identity() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, Some(Pose::DabR));
 }
 
@@ -93,10 +92,9 @@ fn match_close() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, Some(Pose::DabR));
 }
 
@@ -110,10 +108,9 @@ fn nomatch_joint_cutoff() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, None);
 }
 
@@ -128,10 +125,9 @@ fn nomatch_rotation_cutoff() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, None);
 }
 
@@ -147,10 +143,9 @@ fn match_rotation_close() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.08,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, Some(Pose::DabR));
 }
 
@@ -165,10 +160,9 @@ fn match_allign() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, Some(Pose::DabR));
 }
 
@@ -182,9 +176,8 @@ fn match_scale() {
         rotation_cutoff: 0.34,
         joint_cutoff: 0.01,
     };
-    let skeleton = vec![skeleton(&mock_skeleton)];
-    let skeleton_ptr = feed_to_ptr(&skeleton);
+    let skeleton = skeleton(&mock_skeleton);
     let tester = Detector::with_poses(settings, dab_r());
-    let result = tester.detect(&skeleton_ptr[0]);
+    let result = tester.detect(&skeleton.joints);
     assert_eq!(result, Some(Pose::DabR));
 }
